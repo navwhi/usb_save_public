@@ -1,0 +1,5 @@
+# {{ ansible_managed }}
+# The copy account may run ONLY the finalization script as root;
+# the script validates all of its arguments itself.
+Defaults!{{ usb_backup_finalize_bin }} env_reset
+{{ usb_backup_service_user }} ALL=(root) NOPASSWD: {{ usb_backup_finalize_bin }}

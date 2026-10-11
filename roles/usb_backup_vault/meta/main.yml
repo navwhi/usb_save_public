@@ -1,0 +1,13 @@
+---
+galaxy_info:
+  role_name: usb_backup_vault
+  author: admin
+  description: Checks (presence, encryption, content) and loads the Ansible Vault files of the project
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Debian
+      versions:
+        - bookworm
+        - trixie
+dependencies: []

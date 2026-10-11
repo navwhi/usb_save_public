@@ -1,0 +1,90 @@
+---
+# Secrets are NOT in group_vars: they are only loaded by the playbooks
+# that need them (the backup playbook never sees the admin password).
+
+- name: Look for the vault files
+  ansible.builtin.stat:
+    path: "{{ usb_backup_vault_dir }}/{{ item.file }}"
+  loop: "{{ usb_backup_vault_files }}"
+  loop_control:
+    label: "vault/{{ item.file }}"
+  register: _vault_stats
+  delegate_to: localhost
+  run_once: true
+
+- name: Require the mandatory vault files
+  ansible.builtin.assert:
+    that: item.stat.exists or not (item.item.required | default(false))
+    fail_msg: >-
+      Missing file: vault/{{ item.item.file }}.
+      Create it with: ansible-vault create vault/{{ item.item.file }}
+      (template: vault/{{ item.item.file }}.example)
+    quiet: true
+  loop: "{{ _vault_stats.results }}"
+  loop_control:
+    label: "vault/{{ item.item.file }}"
+  run_once: true
+
+- name: Remember the vault files that exist
+  ansible.builtin.set_fact:
+    _vault_present: "{{ _vault_stats.results | selectattr('stat.exists') | list }}"
+
+- name: Read the header of the existing vault files
+  ansible.builtin.command:
+    argv: [head, -n, "1", "{{ item.stat.path }}"]
+  loop: "{{ _vault_present }}"
+  loop_control:
+    label: "vault/{{ item.item.file }}"
+  register: _vault_headers
+  delegate_to: localhost
+  run_once: true
+  changed_when: false
+
+- name: Reject an unencrypted vault file
+  ansible.builtin.assert:
+    that: item.stdout is match(usb_backup_vault_header | regex_escape)
+    fail_msg: >-
+      vault/{{ item.item.item.file }} is NOT encrypted: the password is stored in plain text.
+      Encrypt it first: ansible-vault encrypt vault/{{ item.item.item.file }}
+    quiet: true
+  loop: "{{ _vault_headers.results }}"
+  loop_control:
+    label: "vault/{{ item.item.item.file }}"
+  run_once: true
+
+- name: Load the vault files
+  ansible.builtin.include_vars:
+    file: "{{ item.stat.path }}"
+  loop: "{{ _vault_present }}"
+  loop_control:
+    label: "vault/{{ item.item.file }}"
+  no_log: true
+
+- name: Check that the expected variables are present
+  ansible.builtin.assert:
+    that: hostvars[inventory_hostname][item.1] is defined
+    fail_msg: >-
+      Variable "{{ item.1 }}" is missing from vault/{{ item.0.item.file }}.
+      Add it with: ansible-vault edit vault/{{ item.0.item.file }}
+    quiet: true
+  loop: "{{ _vault_present | subelements('item.vars') }}"
+  loop_control:
+    label: "{{ item.1 }}"
+
+- name: Use the server sudo password stored in the vault
+  ansible.builtin.set_fact:
+    ansible_become_password: "{{ lookup('ansible.builtin.vars', item.item.become_var) }}"
+  loop: "{{ _vault_present | selectattr('item.become_var', 'defined') | selectattr('item.become_host', 'eq', 'server') | list }}"
+  loop_control:
+    label: "vault/{{ item.item.file }}"
+  no_log: true
+
+- name: Use the laptop sudo password stored in the vault
+  ansible.builtin.set_fact:
+    ansible_become_password: "{{ lookup('ansible.builtin.vars', item.item.become_var) }}"
+  loop: "{{ _vault_present | selectattr('item.become_var', 'defined') | selectattr('item.become_host', 'eq', 'laptop') | list }}"
+  loop_control:
+    label: "vault/{{ item.item.file }}"
+  delegate_to: localhost
+  delegate_facts: true
+  no_log: true

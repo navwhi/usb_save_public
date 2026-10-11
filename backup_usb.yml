@@ -1,0 +1,30 @@
+---
+# Backs up a USB key plugged into this laptop to the storage server.
+#   ansible-playbook backup_usb.yml                  (key already mounted by the desktop)
+#   ansible-playbook backup_usb.yml --ask-vault-pass (if vault/laptop.yml exists)
+#   ansible-playbook backup_usb.yml -K               (no vault/laptop.yml, key not mounted)
+# The server is reached with the SSH key of the copy account: no server password is used,
+# and the administration vault (vault/admin.yml) is never loaded here.
+- name: Load the laptop vault (optional)
+  hosts: storage
+  become: false
+  gather_facts: false
+  roles:
+    - role: usb_backup_vault
+      vars:
+        usb_backup_vault_files:
+          - file: laptop.yml
+            required: false
+            vars: [vault_laptop_become_password]
+            become_var: vault_laptop_become_password
+            become_host: laptop
+
+- name: Back up a USB key to the server
+  hosts: storage
+  become: false
+  gather_facts: false
+  vars:
+    ansible_user: "{{ usb_backup_service_user }}"
+    ansible_ssh_private_key_file: "{{ usb_backup_service_key | expanduser }}"
+  roles:
+    - usb_backup_run

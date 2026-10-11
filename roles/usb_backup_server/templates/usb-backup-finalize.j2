@@ -1,0 +1,77 @@
+#!/bin/bash
+# {{ ansible_managed }}
+#
+# usb-backup-finalize <staging_id> <team> <key> <project> <timestamp>
+#
+# Called (through sudo) by the copy account at the end of a transfer:
+#   1. moves the transfer folder out of the copy account's area;
+#   2. hands it over to the team and stores it in /team/key/project/timestamp;
+#   3. computes the SHA-256 checksum of every file, saves the list to
+#      /team/key/project/timestamp.sha256 and prints it on standard output.
+# Operations inside the team folder run AS the team user (runuser): a symbolic
+# link planted by the team can therefore never give it more rights.
+set -euo pipefail
+umask 027
+export LC_ALL=C
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+
+TEAMS_DIR="{{ usb_backup_teams_dir }}"
+INCOMING_DIR="{{ usb_backup_incoming_dir }}"
+PROCESSING_DIR="{{ usb_backup_processing_dir }}"
+TEAMS_GROUP="{{ usb_backup_teams_group }}"
+
+die() { echo "usb-backup-finalize: ERROR: $*" >&2; exit 1; }
+
+[ "$#" -eq 5 ] || die "usage: $0 <staging_id> <team> <key> <project> <timestamp>"
+staging_id=$1 team=$2 key=$3 project=$4 ts=$5
+
+[[ $staging_id =~ ^[A-Za-z0-9_-]{1,100}$ ]]               || die "invalid transfer id"
+[[ $team      =~ ^[a-z][a-z0-9_-]{1,31}$ ]]               || die "invalid team name"
+[[ $key       =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]      || die "invalid key name"
+[[ $project   =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]      || die "invalid project name"
+[[ $ts =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{2}-[0-9]{2}-[0-9]{2}$ ]] || die "invalid timestamp"
+
+id -nG -- "$team" 2>/dev/null | tr ' ' '\n' | grep -qxF -- "$TEAMS_GROUP" \
+  || die "'$team' is not a team"
+
+team_dir="$TEAMS_DIR/$team"
+[ -d "$team_dir" ] && [ ! -L "$team_dir" ] || die "team folder not found: $team_dir"
+
+src="$INCOMING_DIR/$staging_id"
+work="$PROCESSING_DIR/$staging_id"
+[ -e "$src" ] || [ -L "$src" ] || die "transfer not found: $staging_id"
+[ ! -e "$work" ] || die "transfer already being finalized: $staging_id"
+
+# 1. Move the transfer out of the copy account's area (root-only area)
+mv -T -- "$src" "$work"
+if [ -L "$work" ] || [ ! -d "$work" ]; then rm -f -- "$work"; die "invalid transfer"; fi
+
+# 2. Hand the content over to the team (without following links), drop anything
+#    that is neither a regular file nor a directory
+chown -R --no-dereference -- "$team:$team" "$work"
+find "$work" -mindepth 1 ! -type f ! -type d -delete
+find "$work" -type d -exec chmod 2750 {} +
+find "$work" -type f -exec chmod 0640 {} +
+
+tmp_name=".usb-backup-tmp-$staging_id"
+mv -T -- "$work" "$team_dir/$tmp_name"
+
+as_team() { runuser -u "$team" -- "$@"; }
+
+dest="$team_dir/$key/$project/$ts"
+as_team mkdir -p -- "$team_dir/$key/$project"
+if as_team test -e "$dest"; then
+  die "destination already exists: $key/$project/$ts (data left in $team/$tmp_name)"
+fi
+as_team mv -T -- "$team_dir/$tmp_name" "$dest"
+
+# 3. Checksum of what is actually stored
+manifest="$team_dir/$key/$project/$ts.sha256"
+as_team /bin/bash -c '
+  set -euo pipefail
+  export LC_ALL=C
+  cd -- "$1"
+  find . -type f -print0 | sort -z | xargs -0 -r sha256sum > "$2"
+' _ "$dest" "$manifest"
+
+as_team cat -- "$manifest"

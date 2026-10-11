@@ -1,0 +1,15 @@
+---
+usb_backup_team_name_regex: '^[a-z][a-z0-9_-]{1,31}$'
+usb_backup_team_reserved_names:
+  - root
+  - admin
+  - www-data
+  - svc_backup
+  - usbteams
+  - backup
+  - nobody
+  - daemon
+  - sshd
+usb_backup_team_dir: "{{ usb_backup_teams_dir }}/{{ team_name }}"
+usb_backup_team_htpasswd: "{{ usb_backup_web_conf_dir }}/htpasswd/{{ team_name }}"
+usb_backup_team_nginx_conf: "{{ usb_backup_web_conf_dir }}/teams.d/{{ team_name }}.conf"

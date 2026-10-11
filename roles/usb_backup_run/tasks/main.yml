@@ -1,0 +1,328 @@
+---
+# =====================================================================
+# 0. Preliminary checks
+# =====================================================================
+- name: Check that a single server is targeted
+  ansible.builtin.assert:
+    that: ansible_play_hosts_all | length == 1
+    fail_msg: "Target a single storage server (--limit option)."
+    quiet: true
+
+- name: Check the tools needed on the laptop
+  ansible.builtin.command:
+    argv: [which, "{{ item }}"]
+  loop: "{{ usb_backup_local_prereqs }}"
+  delegate_to: localhost
+  changed_when: false
+
+# =====================================================================
+# 1. Team
+# =====================================================================
+- name: Get the list of teams from the server
+  ansible.builtin.getent:
+    database: group
+    key: "{{ usb_backup_teams_group }}"
+
+- name: Remember the teams
+  ansible.builtin.set_fact:
+    run_teams: "{{ (ansible_facts['getent_group'][usb_backup_teams_group][2] | default('', true)).split(',') | select | sort | list }}"
+
+- name: Stop if no team exists
+  ansible.builtin.assert:
+    that: run_teams | length > 0
+    fail_msg: "No team exists on the server: run create_team.yml."
+    quiet: true
+
+- name: Ask for the team
+  ansible.builtin.pause:
+    prompt: |-
+
+      Teams: {{ run_teams | join(', ') }}
+      Which team are you from?
+  register: _team_input
+
+- name: Remember the team
+  ansible.builtin.set_fact:
+    run_team: "{{ _team_input.user_input | trim | lower }}"
+
+- name: Check the team
+  ansible.builtin.assert:
+    that: run_team in run_teams
+    fail_msg: "Unknown team: '{{ run_team }}'."
+    quiet: true
+
+# =====================================================================
+# 2. Choice of the USB key
+# =====================================================================
+- name: Detect the USB keys plugged into the laptop
+  ansible.builtin.command:
+    argv: [python3, "{{ role_path }}/files/list_usb.py"]
+  delegate_to: localhost
+  changed_when: false
+  register: _lsusb
+
+- name: Remember the detected keys
+  ansible.builtin.set_fact:
+    run_usb_volumes: "{{ _lsusb.stdout | from_json }}"
+
+- name: Stop if no key is plugged in
+  ansible.builtin.assert:
+    that: run_usb_volumes | length > 0
+    fail_msg: "No USB key detected on this laptop."
+    quiet: true
+
+- name: Ask which key to back up
+  ansible.builtin.pause:
+    prompt: |-
+
+      USB keys plugged in:
+      {% for v in run_usb_volumes %}
+        {{ loop.index }}) {{ v.path }}  {{ v.size }}  {{ v.fstype }}  label="{{ v.label or '-' }}"  {{ v.model }}
+           {{ ('mounted on ' ~ v.mountpoint) if v.mountpoint else '(not mounted)' }}
+      {% endfor %}
+      Number of the key to back up
+  register: _usb_choice
+
+- name: Check the chosen number
+  ansible.builtin.assert:
+    that:
+      - _usb_choice.user_input | trim is match('^[0-9]+$')
+      - (_usb_choice.user_input | trim | int) >= 1
+      - (_usb_choice.user_input | trim | int) <= run_usb_volumes | length
+    fail_msg: "Invalid choice: '{{ _usb_choice.user_input | trim }}'."
+    quiet: true
+
+- name: Remember the chosen key
+  ansible.builtin.set_fact:
+    run_volume: "{{ run_usb_volumes[(_usb_choice.user_input | trim | int) - 1] }}"
+
+- name: Suggest a default name for the key
+  ansible.builtin.set_fact:
+    run_default_key_name: "{{ run_volume.suggested_name | default('key', true) }}"
+
+- name: Ask for the key name
+  ansible.builtin.pause:
+    prompt: |-
+
+      Name of the key on the server [{{ run_default_key_name }}]
+  register: _key_input
+
+- name: Remember the key name
+  ansible.builtin.set_fact:
+    run_key_name: "{{ (_key_input.user_input | trim) | default(run_default_key_name, true) }}"
+
+- name: Check the key name
+  ansible.builtin.assert:
+    that: run_key_name is match(usb_backup_name_regex)
+    fail_msg: "Invalid name: letters, digits, . _ - (64 characters max, must start with a letter or a digit)."
+    quiet: true
+
+# =====================================================================
+# 3. Project and confirmation
+# =====================================================================
+- name: Ask for the project being backed up
+  ansible.builtin.pause:
+    prompt: |-
+
+      Name of the project being backed up
+  register: _project_input
+
+- name: Prepare the backup parameters
+  ansible.builtin.set_fact:
+    run_project: "{{ _project_input.user_input | trim }}"
+    run_timestamp: "{{ lookup('ansible.builtin.pipe', 'date +' ~ usb_backup_timestamp_format) }}"
+    run_nonce: "{{ lookup('ansible.builtin.password', '/dev/null', chars=['ascii_lowercase', 'digits'], length=8) }}"
+    run_local_uid: "{{ lookup('ansible.builtin.pipe', 'id -u') }}"
+    run_local_gid: "{{ lookup('ansible.builtin.pipe', 'id -g') }}"
+
+- name: Check the project name
+  ansible.builtin.assert:
+    that: run_project is match(usb_backup_name_regex)
+    fail_msg: "Invalid name: letters, digits, . _ - (64 characters max, must start with a letter or a digit)."
+    quiet: true
+
+- name: Compute the paths
+  ansible.builtin.set_fact:
+    run_staging_id: "{{ run_timestamp }}_{{ run_nonce }}"
+    run_staging_dir: "{{ usb_backup_incoming_dir }}/{{ run_timestamp }}_{{ run_nonce }}"
+    run_local_mount: "{{ usb_backup_local_mount_base }}/{{ run_timestamp }}_{{ run_nonce }}"
+    run_dest_display: "/{{ run_team }}/{{ run_key_name }}/{{ run_project }}/{{ run_timestamp }}"
+    run_mounted_by_us: false
+
+- name: Ask for confirmation
+  ansible.builtin.pause:
+    prompt: |-
+
+      Summary
+        Key         : {{ run_volume.path }} ({{ run_volume.size }}, {{ run_volume.fstype }})
+        Destination : {{ run_dest_display }}
+      Start the backup? (y/N)
+  register: _confirm
+
+- name: Stop if not confirmed
+  ansible.builtin.assert:
+    that: _confirm.user_input | trim | lower in ['y', 'yes']
+    fail_msg: "Backup cancelled."
+    quiet: true
+
+# =====================================================================
+# 4. Copy and verification
+# =====================================================================
+- name: Backup
+  block:
+    - name: Mount the key read-only (if it is not mounted yet)
+      when: not run_volume.mountpoint
+      delegate_to: localhost
+      become: true
+      block:
+        - name: Create the temporary mount point
+          ansible.builtin.file:
+            path: "{{ run_local_mount }}"
+            state: directory
+            mode: "0755"
+
+        - name: Mount the key
+          ansible.builtin.command:
+            argv:
+              - mount
+              - -o
+              - "{{ 'ro,uid=' ~ run_local_uid ~ ',gid=' ~ run_local_gid if run_volume.fstype in usb_backup_ownerless_fs else 'ro' }}"
+              - "{{ run_volume.path }}"
+              - "{{ run_local_mount }}"
+          changed_when: true
+
+        - name: Note that the key was mounted by the playbook
+          ansible.builtin.set_fact:
+            run_mounted_by_us: true
+
+    - name: Set the source folder
+      ansible.builtin.set_fact:
+        run_src: "{{ run_volume.mountpoint if run_volume.mountpoint else run_local_mount }}"
+
+    - name: Measure the content of the key
+      ansible.builtin.shell: |
+        set -euo pipefail
+        find . -type f -printf '%s\n' | awk '{ n++; s += $1 } END { printf "%d %d\n", n, s }'
+      args:
+        chdir: "{{ run_src }}"
+        executable: /bin/bash
+      delegate_to: localhost
+      changed_when: false
+      register: _key_size
+
+    - name: Show what is about to be copied
+      ansible.builtin.debug:
+        msg:
+          - "Files to copy : {{ _key_size.stdout.split()[0] }}"
+          - "Total size    : {{ _key_size.stdout.split()[1] | int | human_readable }}"
+          - "No progress is shown during the copy. It stops with an error if no data moves for {{ usb_backup_rsync_timeout }} s."
+
+    - name: Create the transfer folder on the server
+      ansible.builtin.file:
+        path: "{{ run_staging_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Copy the content of the key to the server (rsync)
+      ansible.posix.synchronize:
+        src: "{{ run_src }}/"
+        dest: "{{ run_staging_dir }}/"
+        mode: push
+        verify_host: true   # check the server SSH host key (known_hosts), like the rest of Ansible
+        compress: true
+        archive: false
+        recursive: true
+        times: true
+        links: false
+        perms: false
+        owner: false
+        group: false
+        rsync_opts:
+          - "--chmod=Du+rwx,Fu+rw"
+          - "--timeout={{ usb_backup_rsync_timeout }}"
+      register: _rsync
+      failed_when: false
+
+    - name: Stop if the copy failed
+      ansible.builtin.fail:
+        msg: >-
+          {{ ('The copy stalled: no data moved for ' ~ usb_backup_rsync_timeout ~ ' s. '
+              ~ 'Check the USB key and port (sudo dmesg) and the network, then run the backup again.')
+             if (_rsync.rc | default(-1)) == 30 else
+             ('The copy failed (rsync exit code ' ~ (_rsync.rc | default('unknown')) ~ '): '
+              ~ (_rsync.msg | default('') | trim)) }}
+      when: (_rsync.rc | default(-1)) != 0
+
+    - name: Compute the checksums of the key content
+      ansible.builtin.shell: |
+        set -euo pipefail
+        export LC_ALL=C
+        find . -type f -print0 | sort -z | xargs -0 -r sha256sum
+      args:
+        chdir: "{{ run_src }}"
+        executable: /bin/bash
+      delegate_to: localhost
+      changed_when: false
+      register: _local_sums
+
+    - name: Store the backup and compute the checksums on the server
+      ansible.builtin.command:
+        argv:
+          - sudo
+          - -n
+          - "{{ usb_backup_finalize_bin }}"
+          - "{{ run_staging_id }}"
+          - "{{ run_team }}"
+          - "{{ run_key_name }}"
+          - "{{ run_project }}"
+          - "{{ run_timestamp }}"
+      register: _server_sums
+      changed_when: true
+
+    - name: Compare the checksums
+      ansible.builtin.set_fact:
+        run_sums_ok: "{{ _local_sums.stdout == _server_sums.stdout }}"
+        run_only_on_key: "{{ _local_sums.stdout_lines | difference(_server_sums.stdout_lines) }}"
+        run_only_on_server: "{{ _server_sums.stdout_lines | difference(_local_sums.stdout_lines) }}"
+
+    - name: Verification result
+      ansible.builtin.debug:
+        msg:
+          - "Destination        : {{ run_dest_display }}"
+          - "Files on the key   : {{ _local_sums.stdout_lines | length }}"
+          - "Files backed up    : {{ _server_sums.stdout_lines | length }}"
+          - "Key fingerprint    : {{ _local_sums.stdout | hash('sha256') }}"
+          - "Server fingerprint : {{ _server_sums.stdout | hash('sha256') }}"
+          - "{{ 'CHECKSUMS MATCH: backup verified.' if run_sums_ok else 'MISMATCH DETECTED: see below.' }}"
+          - "Details: {{ run_dest_display }}.sha256"
+
+    - name: Fail on mismatch
+      ansible.builtin.assert:
+        that: run_sums_ok | bool
+        fail_msg:
+          - "The backup does not match the content of the key. Run the backup again."
+          - "Different / missing on the server: {{ run_only_on_key[:20] }}"
+          - "Extra / different on the server  : {{ run_only_on_server[:20] }}"
+        quiet: true
+
+  always:
+    - name: Unmount the key
+      when: run_mounted_by_us | bool
+      delegate_to: localhost
+      become: true
+      block:
+        - name: Unmount
+          ansible.builtin.command:
+            argv: [umount, "{{ run_local_mount }}"]
+          changed_when: true
+
+        - name: Remove the temporary mount point
+          ansible.builtin.file:
+            path: "{{ run_local_mount }}"
+            state: absent
+
+    - name: Clean up the transfer folder if it is still on the server
+      ansible.builtin.file:
+        path: "{{ run_staging_dir }}"
+        state: absent
+      when: run_staging_dir is defined

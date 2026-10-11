@@ -1,0 +1,18 @@
+---
+# Initial installation of the storage server (idempotent, safe to re-run)
+#   ansible-playbook setup_server.yml --ask-vault-pass
+# The server sudo password is read from vault/admin.yml (encrypted).
+- name: Check and load the vault
+  hosts: storage
+  become: false
+  gather_facts: false
+  roles:
+    - usb_backup_vault
+
+- name: Install the USB backup server
+  hosts: storage
+  become: true
+  gather_facts: true
+  roles:
+    - usb_backup_server
+    - usb_backup_web

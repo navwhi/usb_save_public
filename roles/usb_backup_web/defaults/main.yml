@@ -1,0 +1,11 @@
+---
+usb_backup_web_conf_dir: /etc/nginx/usb-backup
+usb_backup_web_root: /var/www/usb-backup
+usb_backup_teams_dir: /srv/usb-backup/teams
+# Also listen on IPv6 (set to false if IPv6 is disabled on the server)
+usb_backup_web_ipv6: true
+usb_backup_web_server_name: "{{ ansible_facts['fqdn'] | default(inventory_hostname) }}"
+# Self-signed certificate (replace it with your own if you have one)
+usb_backup_web_cert_days: 3650
+usb_backup_web_cert_san: >-
+  DNS:{{ ansible_facts['hostname'] }},DNS:{{ ansible_facts['fqdn'] }},IP:{{ ansible_facts['default_ipv4']['address'] | default('127.0.0.1') }}

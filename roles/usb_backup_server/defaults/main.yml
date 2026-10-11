@@ -1,0 +1,13 @@
+---
+usb_backup_base_dir: /srv/usb-backup
+usb_backup_teams_dir: "{{ usb_backup_base_dir }}/teams"
+usb_backup_incoming_dir: "{{ usb_backup_base_dir }}/incoming"
+usb_backup_processing_dir: "{{ usb_backup_base_dir }}/processing"
+usb_backup_teams_group: usbteams
+usb_backup_service_user: svc_backup
+usb_backup_service_home: /var/lib/usb-backup-svc
+# SSH key on the laptop (generated if missing)
+usb_backup_service_key: "~/.ssh/usb_backup_ed25519"
+usb_backup_finalize_bin: /usr/local/sbin/usb-backup-finalize
+# Restrict where the copy account may connect from (e.g. "192.168.1.0/24"); empty = no restriction
+usb_backup_service_allowed_from: ""

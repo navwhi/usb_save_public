@@ -1,0 +1,12 @@
+---
+usb_backup_server_packages:
+  - rsync
+  - sudo
+  - openssh-server
+  - python3-passlib   # required by the htpasswd module (usb_backup_team role)
+  - findutils
+  - util-linux        # runuser
+usb_backup_sshd_config: /etc/ssh/sshd_config
+usb_backup_sudoers_file: /etc/sudoers.d/usb-backup
+# Marker of the sshd_config block written by the French versions of this project
+usb_backup_sshd_legacy_marker: "# {mark} ANSIBLE usb-backup (equipes SFTP)"

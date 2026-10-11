@@ -1,0 +1,16 @@
+---
+# Folder holding the vault files (at the root of the project)
+usb_backup_vault_dir: "{{ playbook_dir }}/vault"
+
+# Files to check and then load:
+#   file        : file name inside usb_backup_vault_dir
+#   required    : the file must exist
+#   vars        : variables it must contain
+#   become_var  : variable holding a sudo password (optional)
+#   become_host : "server" (targeted host) or "laptop" (localhost)
+usb_backup_vault_files:
+  - file: admin.yml
+    required: true
+    vars: [vault_admin_become_password]
+    become_var: vault_admin_become_password
+    become_host: server

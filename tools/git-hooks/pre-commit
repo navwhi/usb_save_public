@@ -1,0 +1,12 @@
+#!/bin/sh
+# Rejects any commit containing a vault file that is not encrypted by ansible-vault.
+# Enable it (once, at the root of the repository):
+#   git config core.hooksPath tools/git-hooks
+status=0
+for f in $(git diff --cached --name-only --diff-filter=ACMR | grep -E '(^|/)(vault[^/]*|vault/[^/]+)\.ya?ml$'); do
+  if ! git show ":$f" | head -n 1 | grep -q '^\$ANSIBLE_VAULT;'; then
+    echo "REJECTED: $f is not encrypted. Run: ansible-vault encrypt $f" >&2
+    status=1
+  fi
+done
+exit $status

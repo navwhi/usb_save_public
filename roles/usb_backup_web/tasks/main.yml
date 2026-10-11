@@ -1,0 +1,88 @@
+---
+- name: Install nginx and openssl
+  ansible.builtin.apt:
+    name: "{{ usb_backup_web_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Create the web configuration folders
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ usb_backup_web_conf_dir }}", group: root, mode: "0755" }
+    - { path: "{{ usb_backup_web_teams_conf_dir }}", group: root, mode: "0755" }
+    - { path: "{{ usb_backup_web_htpasswd_dir }}", group: www-data, mode: "0750" }
+    - { path: "{{ usb_backup_web_tls_dir }}", group: root, mode: "0700" }
+    - { path: "{{ usb_backup_web_root }}", group: root, mode: "0755" }
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Generate a self-signed HTTPS certificate (if missing)
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - req
+      - -x509
+      - -newkey
+      - rsa:4096
+      - -nodes
+      - -days
+      - "{{ usb_backup_web_cert_days }}"
+      - -subj
+      - "/CN={{ usb_backup_web_server_name }}"
+      - -addext
+      - "subjectAltName={{ usb_backup_web_cert_san | trim }}"
+      - -keyout
+      - "{{ usb_backup_web_tls_dir }}/server.key"
+      - -out
+      - "{{ usb_backup_web_tls_dir }}/server.crt"
+    creates: "{{ usb_backup_web_tls_dir }}/server.crt"
+  notify: Reload nginx
+
+- name: Protect the private key
+  ansible.builtin.file:
+    path: "{{ usb_backup_web_tls_dir }}/server.key"
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Install the home page
+  ansible.builtin.copy:
+    src: index.html
+    dest: "{{ usb_backup_web_root }}/index.html"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install the nginx site
+  ansible.builtin.template:
+    src: usb-backup.conf.j2
+    dest: /etc/nginx/sites-available/usb-backup.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload nginx
+
+- name: Enable the site
+  ansible.builtin.file:
+    src: /etc/nginx/sites-available/usb-backup.conf
+    dest: /etc/nginx/sites-enabled/usb-backup.conf
+    state: link
+  notify: Reload nginx
+
+- name: Disable the default site
+  ansible.builtin.file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  notify: Reload nginx
+
+- name: Make sure nginx is running
+  ansible.builtin.service:
+    name: nginx
+    state: started
+    enabled: true

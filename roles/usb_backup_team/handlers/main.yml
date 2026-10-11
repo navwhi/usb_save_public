@@ -1,0 +1,13 @@
+---
+# Restart (not just reload): the nginx processes must re-read their groups
+# after www-data has been added to the team group.
+- name: Test the nginx configuration before restarting
+  ansible.builtin.command: nginx -t
+  changed_when: false
+  listen: Restart nginx
+
+- name: Restart the nginx service
+  ansible.builtin.service:
+    name: nginx
+    state: restarted
+  listen: Restart nginx

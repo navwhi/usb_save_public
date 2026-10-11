@@ -1,0 +1,7 @@
+---
+usb_backup_web_packages:
+  - nginx
+  - openssl
+usb_backup_web_tls_dir: "{{ usb_backup_web_conf_dir }}/tls"
+usb_backup_web_teams_conf_dir: "{{ usb_backup_web_conf_dir }}/teams.d"
+usb_backup_web_htpasswd_dir: "{{ usb_backup_web_conf_dir }}/htpasswd"

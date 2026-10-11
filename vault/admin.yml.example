@@ -1,0 +1,6 @@
+---
+# Template of the ADMINISTRATION vault (setup_server.yml, create_team.yml).
+# Create the real, encrypted file with:
+#   ansible-vault create vault/admin.yml
+# (or: cp vault/admin.yml.example vault/admin.yml && ansible-vault encrypt vault/admin.yml)
+vault_admin_become_password: "sudo-password-of-the-server-admin-account"

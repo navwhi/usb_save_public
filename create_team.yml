@@ -1,0 +1,25 @@
+---
+# Creates a team (user + /team folder), or changes its password if it already exists.
+#   ansible-playbook create_team.yml --ask-vault-pass
+# The server sudo password is read from the vault; the team password is typed in.
+- name: Check and load the vault
+  hosts: storage
+  become: false
+  gather_facts: false
+  roles:
+    - usb_backup_vault
+
+- name: Create or update a team
+  hosts: storage
+  become: true
+  gather_facts: false
+  vars_prompt:
+    - name: team_name
+      prompt: "Team name (lowercase letters, digits, - or _; must start with a letter)"
+      private: false
+    - name: team_password
+      prompt: "Team password (web interface + FileZilla)"
+      private: true
+      confirm: true
+  roles:
+    - usb_backup_team

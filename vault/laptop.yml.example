@@ -1,0 +1,7 @@
+---
+# OPTIONAL - BACKUP vault (backup_usb.yml).
+# Sudo password of the laptop user, only used to mount a USB key
+# that the desktop did not mount automatically.
+# Without this file, add -K to backup_usb.yml when needed.
+#   ansible-vault create vault/laptop.yml
+vault_laptop_become_password: "sudo-password-of-the-laptop"

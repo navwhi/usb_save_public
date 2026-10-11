@@ -1,0 +1,136 @@
+---
+- name: Check that the server runs Debian
+  ansible.builtin.assert:
+    that: ansible_facts['os_family'] == 'Debian'
+    fail_msg: "This role is designed for Debian."
+
+- name: Install the required packages
+  ansible.builtin.apt:
+    name: "{{ usb_backup_server_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+# --- SSH key of the copy account, generated on the laptop (control node) ---
+- name: Create ~/.ssh on the laptop
+  ansible.builtin.file:
+    path: "{{ usb_backup_service_key | expanduser | dirname }}"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Generate the SSH key of the copy account on the laptop
+  ansible.builtin.command:
+    argv:
+      - ssh-keygen
+      - -q
+      - -t
+      - ed25519
+      - -N
+      - ""
+      - -C
+      - "usb-backup@{{ lookup('ansible.builtin.pipe', 'hostname') }}"
+      - -f
+      - "{{ usb_backup_service_key | expanduser }}"
+    creates: "{{ usb_backup_service_key | expanduser }}"
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+# --- Teams group and copy account ---
+- name: Create the teams group
+  ansible.builtin.group:
+    name: "{{ usb_backup_teams_group }}"
+    system: true
+    state: present
+
+- name: Create the copy account (write only, no access to the team folders)
+  ansible.builtin.user:
+    name: "{{ usb_backup_service_user }}"
+    system: true
+    shell: /bin/bash
+    home: "{{ usb_backup_service_home }}"
+    create_home: true
+    password: "*"
+    comment: "USB key copy (Ansible)"
+    state: present
+
+- name: Authorize the laptop SSH key for the copy account
+  ansible.posix.authorized_key:
+    user: "{{ usb_backup_service_user }}"
+    key: "{{ lookup('ansible.builtin.file', (usb_backup_service_key | expanduser) + '.pub') }}"
+    key_options: >-
+      {{ (['from="' ~ usb_backup_service_allowed_from ~ '"'] if usb_backup_service_allowed_from else [])
+         | union(['no-agent-forwarding', 'no-X11-forwarding', 'no-port-forwarding']) | join(',') }}
+    exclusive: true
+    state: present
+
+# --- Folder tree ---
+# teams/: root of the SFTP chroot -> must be owned by root and not writable by others.
+# 0711: everyone can traverse it (each team reaches /its_team) but nobody can list the teams.
+- name: Create the storage folder tree
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ usb_backup_base_dir }}", owner: root, group: root, mode: "0755" }
+    - { path: "{{ usb_backup_teams_dir }}", owner: root, group: root, mode: "0711" }
+    - { path: "{{ usb_backup_incoming_dir }}", owner: "{{ usb_backup_service_user }}", group: "{{ usb_backup_service_user }}", mode: "0700" }
+    - { path: "{{ usb_backup_processing_dir }}", owner: root, group: root, mode: "0700" }
+  loop_control:
+    label: "{{ item.path }}"
+
+# --- Finalization (the only privileged action allowed to the copy account) ---
+- name: Install the finalization script
+  ansible.builtin.template:
+    src: usb-backup-finalize.j2
+    dest: "{{ usb_backup_finalize_bin }}"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Allow the copy account to run only the finalization script
+  ansible.builtin.template:
+    src: sudoers-usb-backup.j2
+    dest: "{{ usb_backup_sudoers_file }}"
+    owner: root
+    group: root
+    mode: "0440"
+    validate: /usr/sbin/visudo -cf %s
+
+# --- Chrooted SFTP for the teams (FileZilla) ---
+- name: Remove the SFTP block written by previous (French) versions of this project
+  ansible.builtin.blockinfile:
+    path: "{{ usb_backup_sshd_config }}"
+    marker: "{{ usb_backup_sshd_legacy_marker }}"
+    state: absent
+    validate: /usr/sbin/sshd -t -f %s
+  notify: Restart ssh
+
+- name: Configure the chrooted SFTP for the teams
+  ansible.builtin.blockinfile:
+    path: "{{ usb_backup_sshd_config }}"
+    marker: "# {mark} ANSIBLE usb-backup (team SFTP)"
+    insertafter: EOF
+    block: |
+      Match Group {{ usb_backup_teams_group }}
+          ChrootDirectory {{ usb_backup_teams_dir }}
+          ForceCommand internal-sftp -u 0027 -d /%u
+          PasswordAuthentication yes
+          AllowTcpForwarding no
+          AllowAgentForwarding no
+          X11Forwarding no
+          PermitTunnel no
+    validate: /usr/sbin/sshd -t -f %s
+  notify: Restart ssh
+
+- name: Make sure ssh is running
+  ansible.builtin.service:
+    name: ssh
+    state: started
+    enabled: true

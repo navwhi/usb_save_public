@@ -1,0 +1,100 @@
+---
+- name: Check the team name and password
+  ansible.builtin.assert:
+    that:
+      - team_name is match(usb_backup_team_name_regex)
+      - team_name not in usb_backup_team_reserved_names
+      - team_password | length >= usb_backup_team_password_min_length
+    fail_msg: >-
+      Invalid name (lowercase letters, digits, - or _, 2 to 32 characters, must start with a letter,
+      reserved names not allowed) or password too short (at least {{ usb_backup_team_password_min_length }} characters).
+    quiet: true
+
+- name: Check that the server has been installed (setup_server.yml)
+  ansible.builtin.stat:
+    path: "{{ usb_backup_web_conf_dir }}/teams.d"
+  register: _teams_conf_dir
+
+- name: Stop if the server is not installed
+  ansible.builtin.assert:
+    that: _teams_conf_dir.stat.isdir | default(false)
+    fail_msg: "Run setup_server.yml first."
+    quiet: true
+
+- name: Look for an existing account with this name
+  ansible.builtin.command:
+    argv: [id, -nG, "{{ team_name }}"]
+  register: _existing
+  changed_when: false
+  failed_when: false
+
+- name: Refuse an existing system account that is not a team
+  ansible.builtin.assert:
+    that: >-
+      _existing.rc != 0 or
+      usb_backup_teams_group in _existing.stdout.split()
+    fail_msg: "An account named '{{ team_name }}' already exists and is not a team."
+    quiet: true
+
+- name: Create the team group
+  ansible.builtin.group:
+    name: "{{ team_name }}"
+    state: present
+
+- name: Create the team user (or update its password)
+  ansible.builtin.user:
+    name: "{{ team_name }}"
+    group: "{{ team_name }}"
+    groups: ["{{ usb_backup_teams_group }}"]
+    append: true
+    home: "{{ usb_backup_team_dir }}"
+    create_home: false
+    shell: /usr/sbin/nologin
+    comment: "Team {{ team_name }} (USB backups)"
+    password: "{{ team_password | password_hash('sha512') }}"
+    update_password: always
+    state: present
+  no_log: true
+
+# 2750: the team reads/writes/deletes; its group (including www-data) reads; nobody else.
+- name: Create the team folder /{{ team_name }}
+  ansible.builtin.file:
+    path: "{{ usb_backup_team_dir }}"
+    state: directory
+    owner: "{{ team_name }}"
+    group: "{{ team_name }}"
+    mode: "2750"
+
+- name: Let the web server read the team files
+  ansible.builtin.user:
+    name: www-data
+    groups: ["{{ team_name }}"]
+    append: true
+  notify: Restart nginx
+
+- name: Store the team password for the web interface
+  community.general.htpasswd:
+    path: "{{ usb_backup_team_htpasswd }}"
+    name: "{{ team_name }}"
+    password: "{{ team_password }}"
+    crypt_scheme: sha512_crypt
+    owner: root
+    group: www-data
+    mode: "0640"
+  no_log: true
+
+- name: Publish the team folder on the web interface
+  ansible.builtin.template:
+    src: team-location.conf.j2
+    dest: "{{ usb_backup_team_nginx_conf }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart nginx
+
+- name: Summary
+  ansible.builtin.debug:
+    msg:
+      - "Team '{{ team_name }}' is ready."
+      - "Web      : https://{{ ansible_host | default(inventory_hostname) }}/{{ team_name }}/"
+      - "FileZilla: SFTP, host {{ ansible_host | default(inventory_hostname) }}, port 22, user {{ team_name }}"

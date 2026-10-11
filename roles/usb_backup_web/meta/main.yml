@@ -1,0 +1,13 @@
+---
+galaxy_info:
+  role_name: usb_backup_web
+  author: admin
+  description: Web interface (nginx, HTTPS, per-team authentication) to download the backups
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Debian
+      versions:
+        - bookworm
+        - trixie
+dependencies: []

@@ -1,0 +1,6 @@
+---
+usb_backup_name_regex: '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'
+usb_backup_timestamp_format: '%Y-%m-%d_%H-%M-%S'
+# Filesystems without file owners: they are mounted with the uid of the user
+usb_backup_ownerless_fs: [vfat, exfat, ntfs, ntfs3, msdos]
+usb_backup_local_prereqs: [rsync, lsblk, sha256sum, python3, find, xargs, sort]

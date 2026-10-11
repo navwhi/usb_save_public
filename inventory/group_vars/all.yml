@@ -1,0 +1,12 @@
+---
+# Variables shared by all roles (the roles define the same default values).
+usb_backup_base_dir: /srv/usb-backup
+usb_backup_teams_dir: "{{ usb_backup_base_dir }}/teams"
+usb_backup_incoming_dir: "{{ usb_backup_base_dir }}/incoming"
+usb_backup_processing_dir: "{{ usb_backup_base_dir }}/processing"
+usb_backup_teams_group: usbteams
+usb_backup_service_user: svc_backup
+# SSH key (on the laptop) used by the backup playbook
+usb_backup_service_key: "~/.ssh/usb_backup_ed25519"
+usb_backup_finalize_bin: /usr/local/sbin/usb-backup-finalize
+usb_backup_web_conf_dir: /etc/nginx/usb-backup

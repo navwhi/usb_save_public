@@ -1,0 +1,9 @@
+---
+usb_backup_incoming_dir: /srv/usb-backup/incoming
+usb_backup_teams_group: usbteams
+usb_backup_finalize_bin: /usr/local/sbin/usb-backup-finalize
+# Temporary mount point on the laptop for keys that are not mounted
+usb_backup_local_mount_base: /mnt/usb-backup
+# rsync gives up if no data moves for this many seconds (stalled key, port or network).
+# It is not a limit on the total duration: a long copy that keeps moving is never stopped.
+usb_backup_rsync_timeout: 300

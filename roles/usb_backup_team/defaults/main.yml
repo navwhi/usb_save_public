@@ -1,0 +1,8 @@
+---
+usb_backup_teams_dir: /srv/usb-backup/teams
+usb_backup_teams_group: usbteams
+usb_backup_web_conf_dir: /etc/nginx/usb-backup
+usb_backup_team_password_min_length: 12
+# Provided by the vars_prompt of the create_team.yml playbook
+team_name: ""
+team_password: ""
